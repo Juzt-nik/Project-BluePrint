@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -16,14 +16,19 @@ from app.models.enums import (
 )
 
 
+def utc_now() -> datetime:
+    """Return a timezone-aware UTC timestamp for ORM defaults."""
+    return datetime.now(timezone.utc)
+
+
 def enum_type(enum_cls, name: str):
     return SAEnum(enum_cls, name=name, values_callable=lambda cls: [e.value for e in cls])
 
 
 class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow,
-                                                  onupdate=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now,
+                                                  onupdate=utc_now, nullable=False)
 
 
 class Institution(TimestampMixin, Base):
@@ -132,7 +137,7 @@ class Document(TimestampMixin, Base):
     is_synthetic: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     watermark_label: Mapped[str | None] = mapped_column(String(120))
     uploaded_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     deposit: Mapped[Deposit] = relationship(back_populates="documents")
     instrument: Mapped[Instrument | None] = relationship(back_populates="documents")
 
@@ -160,7 +165,7 @@ class CaseEvent(Base):
     actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     reason: Mapped[str | None] = mapped_column(Text)
     event_metadata: Mapped[dict | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     case: Mapped[Case] = relationship(back_populates="events")
 
 
@@ -240,4 +245,4 @@ class AuditEvent(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     correlation_id: Mapped[str | None] = mapped_column(String(100))
     is_synthetic: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

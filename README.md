@@ -10,13 +10,13 @@ Starter foundation for SIH26265: Security Deposit / FDR Management Portal.
 - Explicit state-machine transition rules for deposit, case, and release request
 - REST endpoints for health, institutions, deposits, and controlled transitions
 - Initial Alembic migration
-- Pytest tests for workflow rules
+- Pytest tests for workflow rules and initial API authorization boundaries
 - Synthetic-data and external-verification safety conventions
 
 ## Not included yet
-- Supabase Auth token validation and application-user provisioning (next milestone)
-- Private Supabase Storage upload/download endpoints (next milestone)
-- Enforced role-based access and institution-level data isolation (must be implemented before public use)
+- Supabase Auth application-user provisioning / onboarding flow
+- Private Supabase Storage upload/download endpoints
+- Comprehensive security review, database RLS policies, and production-grade authorization testing
 - Real bank or AICTE integration
 - OCR pipeline
 - Email/SMS delivery
@@ -110,5 +110,9 @@ The release route is represented by `release_method`: `FDR_RPGF` or `RTGS`. The 
 ## Important implementation notes
 - Do not store uploaded files in a public directory. `Document.storage_key` is metadata only.
 - `AuditEvent` is designed as append-only by application convention; database permissions/triggers and stronger tamper-evidence are needed for production.
-- Database connectivity can be configured for Supabase, but authentication, authorization, institution-level isolation, and private Storage endpoints are not implemented yet. Do not expose this API publicly until those controls are implemented and tested.
+- Supabase Auth token validation and initial API role/institution checks are implemented, with mocked API authorization tests. These are not a production security certification. Database RLS policies, private Storage endpoints, comprehensive role/permission tests, and a security review are still required. Do not expose this API publicly until those controls are implemented and tested.
 - Demo records/documents must be synthetic and visibly watermarked.
+### Dependency and timestamp notes
+
+- ORM timestamp defaults use timezone-aware UTC values (`datetime.now(timezone.utc)`).
+- Starlette is constrained below `0.50` to avoid the deprecation warning from its legacy `TestClient` integration with HTTPX. Reinstall dependencies after pulling this change.

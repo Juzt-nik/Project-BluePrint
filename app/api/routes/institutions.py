@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_authenticated_user, normalized_role, require_roles
+from app.core.security import get_authenticated_user, is_institution_user, normalized_role, require_roles
 from app.db.session import get_db
 from app.models.entities import Institution, User
 from app.schemas.institution import InstitutionCreate, InstitutionRead
@@ -30,12 +30,11 @@ def list_institutions(
     db: Session = Depends(get_db),
     user: User = Depends(get_authenticated_user),
 ):
-    role = normalized_role(user)
     query = db.query(Institution)
-    if role == "institution_rep":
+    if is_institution_user(user):
         if not user.institution_id:
             return []
         query = query.filter(Institution.id == user.institution_id)
-    elif role not in {"admin", "scrutiny_officer", "clearance_officer", "competent_authority", "auditor"}:
-        raise HTTPException(status_code=403, detail="You are not authorized to list institutions.")
+    elif normalized_role(user) not in {"admin", "case_officer", "clearance_officer", "approval_authority", "auditor", "technical_admin"}:
+        raise HTTPException(status_code=403, detail="You are not permitted to view institutions.")
     return query.order_by(Institution.legal_name).all()
