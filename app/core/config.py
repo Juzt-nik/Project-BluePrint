@@ -6,9 +6,12 @@ class Settings(BaseSettings):
     app_name: str = "SIH26265 FDR Management Portal"
     environment: str = "development"
 
+    # Runtime connection must use a dedicated, non-owner, non-superuser DB role.
     database_url: str = (
-        "postgresql+psycopg://postgres:postgres@localhost:5432/sih26265"
+        "postgresql+psycopg://blueprint_app:CHANGE_ME@localhost:5432/sih26265"
     )
+    # Use a schema-owner connection only for Alembic migrations; never for API traffic.
+    migration_database_url: str | None = None
     database_ssl_required: bool = False
     database_pool_size: int = 5
     database_max_overflow: int = 5

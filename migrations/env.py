@@ -16,7 +16,7 @@ config = context.config
 # Escape percent signs for ConfigParser compatibility.
 config.set_main_option(
     "sqlalchemy.url",
-    settings.database_url.replace("%", "%%"),
+    (settings.migration_database_url or settings.database_url).replace("%", "%%"),
 )
 
 # Configure logging.
@@ -41,7 +41,7 @@ def get_connect_args() -> dict:
 def run_migrations_offline() -> None:
     """Run migrations without creating a database connection."""
     context.configure(
-        url=settings.database_url,
+        url=(settings.migration_database_url or settings.database_url),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -55,7 +55,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations using a live database connection."""
     connectable = engine_from_config(
-        {"sqlalchemy.url": settings.database_url},
+        {"sqlalchemy.url": settings.migration_database_url or settings.database_url},
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
         connect_args=get_connect_args(),

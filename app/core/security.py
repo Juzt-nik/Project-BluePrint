@@ -3,6 +3,7 @@ from typing import Annotated, Callable
 
 import httpx
 from fastapi import Depends, HTTPException
+from sqlalchemy import event, text
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,36 @@ def normalized_role(user: User) -> str:
     return ROLE_ALIASES.get((user.role or "").strip().lower(), "unknown")
 
 
+def _apply_rls_context_to_connection(connection, values: dict[str, str | None]) -> None:
+    for key, value in values.items():
+        connection.execute(
+            text("SELECT set_config(:setting_name, :setting_value, true)"),
+            {"setting_name": f"app.{key}", "setting_value": value or ""},
+        )
+
+
+@event.listens_for(Session, "after_begin")
+def _restore_rls_context_after_transaction(session, transaction, connection) -> None:
+    """Reapply transaction-local RLS context after every commit/rollback boundary."""
+    values = session.info.get("_app_rls_context")
+    if values and connection.dialect.name == "postgresql":
+        _apply_rls_context_to_connection(connection, values)
+
+
+def _set_rls_context(db: Session, **values: str | None) -> None:
+    """Set transaction-local PostgreSQL RLS context; SQLite tests intentionally skip it."""
+    try:
+        dialect = db.get_bind().dialect.name
+    except Exception:
+        return
+    if dialect != "postgresql":
+        return
+    context = db.info.setdefault("_app_rls_context", {})
+    context.update(values)
+    # Apply now; the Session event reapplies these values after later commits.
+    _apply_rls_context_to_connection(db.connection(), context)
+
+
 def get_authenticated_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     db: Session = Depends(get_db),
@@ -61,9 +92,18 @@ def get_authenticated_user(
     except (ValueError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=401, detail="Invalid authentication response.") from exc
 
+    # The users table itself is RLS-protected, so provide only the verified Supabase
+    # identity before the initial app-user lookup. This is transaction-local.
+    _set_rls_context(db, supabase_auth_user_id=auth_user_id)
     user = db.query(User).filter(User.supabase_auth_user_id == auth_user_id).first()
     if user is None or not user.is_active:
         raise HTTPException(status_code=403, detail="No active application account is linked to this identity.")
+    _set_rls_context(
+        db,
+        user_id=user.id,
+        institution_id=user.institution_id,
+        role=normalized_role(user),
+    )
     return user
 
 
