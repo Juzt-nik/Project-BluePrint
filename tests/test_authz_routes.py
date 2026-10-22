@@ -10,8 +10,8 @@ from app.core.security import get_authenticated_user
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
-from app.models.entities import AuditEvent, Deposit, Institution, User
-from app.models.enums import DepositMethod, DepositStatus
+from app.models.entities import AuditEvent, Deposit, Document, Institution, User
+from app.models.enums import DepositMethod, DepositStatus, DocumentType
 
 
 @pytest.fixture()
@@ -175,3 +175,42 @@ def test_valid_supabase_identity_without_active_app_user_returns_403(client: Tes
     monkeypatch.setattr(security.httpx, "get", lambda *args, **kwargs: SimpleNamespace(status_code=200, json=lambda: {"id": "unlinked-auth-user"}))
     response = client.get("/api/v1/deposits", headers={"Authorization": "Bearer valid-shaped-token"})
     assert response.status_code == 403
+
+
+def test_document_download_is_scoped_to_institution(client: TestClient, data, db_session: Session, monkeypatch):
+    from app.api.routes import documents as document_routes
+
+    doc = Document(
+        deposit_id=data["deposit_b"].id,
+        document_type=DocumentType.FDR_COPY,
+        original_filename="demo.pdf",
+        storage_key=f"institutions/{data['institution_b'].id}/demo.pdf",
+        is_synthetic=bool(data["institution_b"].is_synthetic),
+    )
+    db_session.add(doc)
+    db_session.commit()
+    use_user(data["institution_user"])
+    monkeypatch.setattr(document_routes, "download_private_object", lambda key: (b"%PDF-demo", "application/pdf"))
+    response = client.get(f"/api/v1/documents/{doc.id}/download")
+    assert response.status_code == 403
+
+
+def test_authorized_document_download_is_private_and_no_store(client: TestClient, data, db_session: Session, monkeypatch):
+    from app.api.routes import documents as document_routes
+
+    doc = Document(
+        deposit_id=data["deposit_a"].id,
+        document_type=DocumentType.FDR_COPY,
+        original_filename="demo.pdf",
+        storage_key=f"institutions/{data['institution_a'].id}/demo.pdf",
+        is_synthetic=True,
+    )
+    db_session.add(doc)
+    db_session.commit()
+    use_user(data["institution_user"])
+    monkeypatch.setattr(document_routes, "download_private_object", lambda key: (b"%PDF-demo", "application/pdf"))
+    response = client.get(f"/api/v1/documents/{doc.id}/download")
+    assert response.status_code == 200
+    assert response.content == b"%PDF-demo"
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"

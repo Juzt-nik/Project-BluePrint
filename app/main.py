@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
 from app.core.config import settings
-from app.api.routes import health, institutions, deposits
+from app.api.routes import health, institutions, deposits, documents
 
 app = FastAPI(
     title=settings.app_name,
@@ -15,6 +15,7 @@ app = FastAPI(
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(institutions.router, prefix="/api/v1")
 app.include_router(deposits.router, prefix="/api/v1")
+app.include_router(documents.router, prefix="/api/v1")
 
 
 @app.get("/")
