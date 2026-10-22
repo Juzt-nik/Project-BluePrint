@@ -89,3 +89,31 @@ def get_authenticated_user(
         )
 
     return user
+
+
+# Application roles are provisioned by trusted administrators, never by request payloads.
+ROLE_ALIASES = {
+    "institution_rep": "institution_rep",
+    "institution_representative": "institution_rep",
+    "admin": "admin",
+    "scrutiny_officer": "scrutiny_officer",
+    "clearance_officer": "clearance_officer",
+    "competent_authority": "competent_authority",
+    "technical_admin": "technical_admin",
+    "auditor": "auditor",
+}
+
+def normalized_role(user: User) -> str:
+    raw_role = (user.role or "").strip().lower()
+    return ROLE_ALIASES.get(raw_role, raw_role)
+
+def require_roles(*allowed_roles: str):
+    """Return a FastAPI dependency that checks the authenticated app user's role."""
+    allowed = {ROLE_ALIASES.get(role.lower(), role.lower()) for role in allowed_roles}
+
+    def dependency(user: User = Depends(get_authenticated_user)) -> User:
+        if normalized_role(user) not in allowed:
+            raise HTTPException(status_code=403, detail="You are not authorized to perform this action.")
+        return user
+
+    return dependency

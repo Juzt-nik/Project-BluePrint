@@ -30,4 +30,3 @@ class DepositRead(DepositCreate):
 class DepositTransitionRequest(BaseModel):
     target_status: DepositStatus
     reason: str | None = Field(default=None, max_length=2000)
-    actor_user_id: str | None = None

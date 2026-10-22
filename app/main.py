@@ -8,7 +8,7 @@ app = FastAPI(
     version="0.1.0",
     description=(
         "Prototype API for SIH26265. Not an official AICTE system. "
-        "Authentication and authorization must be added before public deployment."
+        "Authentication is validated through Supabase Auth; authorization is an initial prototype policy that requires further security testing before public deployment."
     ),
 )
 
