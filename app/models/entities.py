@@ -40,16 +40,35 @@ class Institution(TimestampMixin, Base):
     deposits: Mapped[list["Deposit"]] = relationship(back_populates="institution")
 
 
+
 class User(TimestampMixin, Base):
     __tablename__ = "users"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    institution_id: Mapped[str | None] = mapped_column(ForeignKey("institutions.id", ondelete="RESTRICT"), index=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    supabase_auth_user_id: Mapped[str | None] = mapped_column(
+        String(36),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+    institution_id: Mapped[str | None] = mapped_column(
+        ForeignKey("institutions.id", ondelete="RESTRICT"),
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(
+        String(320), unique=True, nullable=False, index=True
+    )
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_demo_account: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    institution: Mapped[Institution | None] = relationship(back_populates="users")
+
+    institution: Mapped[Institution | None] = relationship(
+        back_populates="users"
+    )
+
 
 
 class Deposit(TimestampMixin, Base):
