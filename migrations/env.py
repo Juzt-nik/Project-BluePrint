@@ -29,10 +29,8 @@ target_metadata = Base.metadata
 
 def get_connect_args() -> dict:
     """Return connection arguments required by the database."""
-    if (
-        settings.database_ssl_required
-        or "supabase" in settings.database_url.lower()
-    ):
+    migration_url = settings.migration_database_url or settings.database_url
+    if settings.database_ssl_required or "supabase" in migration_url.lower():
         return {"sslmode": "require"}
 
     return {}
