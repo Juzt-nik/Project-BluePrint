@@ -141,3 +141,16 @@ Security limitations to address before production:
 - Add antivirus/content scanning, operational orphan-object reconciliation, retention/deletion policy, rate limits, and comprehensive role matrix tests.
 - Review CORS, request-size limits at the reverse proxy, and the exact staff roles permitted to upload/download each document type.
 - Confirm the bucket is private in the Supabase dashboard. This API cannot make a public bucket private on its own.
+
+
+## Release-clearance workflow (Phase 2)
+
+This phase adds API endpoints under `/api/v1/release-requests`:
+- `POST /release-requests` — create a release request for an ACTIVE or MATURED deposit; maturity alone never releases a deposit.
+- `GET /release-requests` and `GET /release-requests/{id}` — role/institution-scoped reads.
+- `POST /release-requests/{id}/clearances/{unit}` — clearance officers record a decision for `PGRC`, `VIGILANCE`, or `RELEVANT_CELL_OR_BUREAU`.
+- `POST /release-requests/{id}/transition` — controlled state transitions, including a required clearance gate before `READY_FOR_AUTHORITY`, and a required authority reference/date/note before final action can be recorded.
+
+The three clearance units are a conservative prototype baseline, not a claim that they are the complete or universally applicable AICTE clearance list. Confirm the exact units and NOC rules against current official instructions before production use. This prototype records a final authority action; it does not execute a bank transfer or contact AICTE/banks. Do not treat `NOT_APPLICABLE` as a shortcut without a documented policy and authorized review.
+
+Run `python -m pytest -q` in the project virtual environment. This ZIP was assembled from the supplied repository snapshot; full tests could not be executed in the packaging environment because its Python environment does not include the `psycopg` driver. Validate locally before committing.
