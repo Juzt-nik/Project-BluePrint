@@ -12,10 +12,12 @@ from app.models.enums import ClearanceStatus, ClearanceUnit, DepositStatus, Rele
 from app.workflow.state_machine import InvalidTransition, validate_transition, RELEASE_TRANSITIONS
 
 router = APIRouter(prefix="/release-requests", tags=["release requests"])
-REVIEW_ROLES = {"admin", "case_officer"}
-CLEARANCE_ROLES = {"clearance_officer", "admin"}
-AUTHORITY_ROLES = {"approval_authority", "admin"}
-READ_ROLES = {"admin", "case_officer", "clearance_officer", "approval_authority", "auditor", "technical_admin"}
+REVIEW_ROLES = {"case_officer"}
+ASSIGN_ROLES = {"case_officer", "admin"}
+# Platform administration is intentionally separate from regulatory decisions.
+CLEARANCE_ROLES = {"clearance_officer"}
+AUTHORITY_ROLES = {"approval_authority"}
+READ_ROLES = {"admin", "case_officer", "clearance_officer", "approval_authority", "auditor"}
 
 
 class ReleaseCreate(BaseModel):
@@ -37,8 +39,17 @@ class ClearanceDecision(BaseModel):
     outcome_note: str = Field(min_length=1, max_length=2000)
 
 
-def _get_release(db: Session, release_id: str) -> ReleaseRequest:
-    item = db.get(ReleaseRequest, release_id)
+class ClearanceAssignment(BaseModel):
+    assigned_to_user_id: str
+
+
+def _get_release(db: Session, release_id: str, *, lock: bool = False) -> ReleaseRequest:
+    query = db.query(ReleaseRequest).filter(ReleaseRequest.id == release_id)
+    # On PostgreSQL this serializes clearance decisions and workflow transitions
+    # for a release request. SQLite ignores FOR UPDATE, which is fine for tests.
+    if lock:
+        query = query.with_for_update()
+    item = query.one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="Release request not found.")
     return item
@@ -74,7 +85,10 @@ def _required_clearances_met(item: ReleaseRequest) -> tuple[bool, list[str]]:
     missing = []
     for unit in sorted(required, key=lambda u: u.value):
         record = by_unit.get(unit)
-        if record is None or record.status not in {ClearanceStatus.CLEARED, ClearanceStatus.NOT_APPLICABLE}:
+        # Every configured mandatory unit must explicitly clear the request.
+        # NOT_APPLICABLE does not satisfy a mandatory gate without a separately
+        # approved policy exception mechanism.
+        if record is None or record.status != ClearanceStatus.CLEARED:
             missing.append(unit.value)
     return not missing, missing
 
@@ -125,11 +139,48 @@ def get_release_request(release_id: str, db: Session = Depends(get_db), user: Us
     return _serialize(item)
 
 
+@router.post("/{release_id}/clearances/{unit}/assign")
+def assign_clearance(
+    release_id: str,
+    unit: ClearanceUnit,
+    payload: ClearanceAssignment,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_authenticated_user),
+):
+    if normalized_role(user) not in ASSIGN_ROLES:
+        raise HTTPException(status_code=403, detail="Only authorized case reviewers may assign clearances.")
+    item = _get_release(db, release_id, lock=True)
+    if item.status not in {ReleaseStatus.DOCUMENT_REVIEW, ReleaseStatus.AWAITING_CLEARANCES}:
+        raise HTTPException(status_code=409, detail="Clearances can only be assigned during document review or the clearance stage.")
+    record = next((c for c in item.clearances if c.unit == unit), None)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Clearance unit is not configured for this release.")
+    assignee = db.get(User, payload.assigned_to_user_id)
+    if assignee is None or not assignee.is_active or normalized_role(assignee) != "clearance_officer":
+        raise HTTPException(status_code=422, detail="Assignee must be an active clearance officer.")
+    if assignee.id == item.requested_by_user_id:
+        raise HTTPException(status_code=409, detail="The release requester cannot be assigned to clear their own request.")
+    before = {"unit": unit.value, "assigned_to_user_id": record.assigned_to_user_id}
+    record.assigned_to_user_id = assignee.id
+    if record.status == ClearanceStatus.NOT_STARTED:
+        record.status = ClearanceStatus.PENDING
+    _audit(db, item, user, "RELEASE_CLEARANCE_ASSIGNED", before, {"unit": unit.value, "assigned_to_user_id": assignee.id})
+    db.commit()
+    db.refresh(item)
+    return _serialize(item)
+
+
 @router.post("/{release_id}/clearances/{unit}")
-def decide_clearance(release_id: str, unit: ClearanceUnit, payload: ClearanceDecision, db: Session = Depends(get_db), user: User = Depends(get_authenticated_user)):
+def decide_clearance(
+    release_id: str,
+    unit: ClearanceUnit,
+    payload: ClearanceDecision,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_authenticated_user),
+):
     if normalized_role(user) not in CLEARANCE_ROLES:
         raise HTTPException(status_code=403, detail="Only clearance officers may record clearance decisions.")
-    item = _get_release(db, release_id)
+    item = _get_release(db, release_id, lock=True)
     if item.status not in {ReleaseStatus.AWAITING_CLEARANCES, ReleaseStatus.DOCUMENT_REVIEW}:
         raise HTTPException(status_code=409, detail="Clearances can only be recorded during document review or the clearance stage.")
     if payload.status not in {ClearanceStatus.CLEARED, ClearanceStatus.NOT_CLEARED, ClearanceStatus.NOT_APPLICABLE}:
@@ -137,6 +188,12 @@ def decide_clearance(release_id: str, unit: ClearanceUnit, payload: ClearanceDec
     record = next((c for c in item.clearances if c.unit == unit), None)
     if record is None:
         raise HTTPException(status_code=404, detail="Clearance unit is not configured for this release.")
+    if record.assigned_to_user_id is None:
+        raise HTTPException(status_code=409, detail="This clearance must be assigned before a decision can be recorded.")
+    if record.assigned_to_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the officer assigned to this clearance may decide it.")
+    if item.requested_by_user_id == user.id:
+        raise HTTPException(status_code=403, detail="The release requester cannot decide their own clearance.")
     before = {"unit": unit.value, "status": record.status.value}
     record.status = payload.status
     record.outcome_note = payload.outcome_note
@@ -151,14 +208,17 @@ def decide_clearance(release_id: str, unit: ClearanceUnit, payload: ClearanceDec
 
 @router.post("/{release_id}/transition")
 def transition_release_request(release_id: str, payload: ReleaseTransition, db: Session = Depends(get_db), user: User = Depends(get_authenticated_user)):
-    item = _get_release(db, release_id)
+    item = _get_release(db, release_id, lock=True)
     _check_read_access(item, user)
     role = normalized_role(user)
     target = payload.target_status
 
-    if target in {ReleaseStatus.SUBMITTED, ReleaseStatus.CLARIFICATION_REQUIRED}:
+    if target == ReleaseStatus.SUBMITTED:
         if not is_institution_user(user) and role not in REVIEW_ROLES:
-            raise HTTPException(status_code=403, detail="You are not permitted to submit or clarify this release request.")
+            raise HTTPException(status_code=403, detail="You are not permitted to submit this release request.")
+    elif target == ReleaseStatus.CLARIFICATION_REQUIRED:
+        if role not in REVIEW_ROLES:
+            raise HTTPException(status_code=403, detail="Only case officers may request clarification.")
     elif target in {ReleaseStatus.DOCUMENT_REVIEW, ReleaseStatus.AWAITING_CLEARANCES, ReleaseStatus.REJECTED}:
         if role not in REVIEW_ROLES:
             raise HTTPException(status_code=403, detail="Only case officers may perform this workflow transition.")
@@ -180,6 +240,10 @@ def transition_release_request(release_id: str, payload: ReleaseTransition, db: 
             raise HTTPException(status_code=409, detail={"message": "Required clearances are incomplete.", "missing_clearances": missing})
         if not payload.final_action_reference or not payload.final_action_date or not payload.final_action_note:
             raise HTTPException(status_code=422, detail="Final action reference, date, and note are required.")
+        if item.requested_by_user_id == user.id:
+            raise HTTPException(status_code=403, detail="The release requester cannot approve their own release.")
+        if any(c.decided_by_user_id == user.id for c in item.clearances):
+            raise HTTPException(status_code=403, detail="A clearance decision-maker cannot provide the final authority action for the same release.")
         item.final_authority_role = role
         item.final_action_reference = payload.final_action_reference
         item.final_action_date = payload.final_action_date
@@ -187,8 +251,13 @@ def transition_release_request(release_id: str, payload: ReleaseTransition, db: 
     elif target == ReleaseStatus.COMPLETED:
         if role not in AUTHORITY_ROLES:
             raise HTTPException(status_code=403, detail="Only the competent authority may complete a release.")
-        if item.status != ReleaseStatus.AUTHORITY_ACTION_RECORDED or not item.final_action_reference:
+        if item.status != ReleaseStatus.AUTHORITY_ACTION_RECORDED:
             raise HTTPException(status_code=409, detail="A recorded competent-authority action is required before completion.")
+        if not item.final_action_reference or not item.final_action_date or not item.final_action_note:
+            raise HTTPException(status_code=409, detail="Complete authority-action details are required before completion.")
+        ok, missing = _required_clearances_met(item)
+        if not ok:
+            raise HTTPException(status_code=409, detail={"message": "Required clearances are incomplete.", "missing_clearances": missing})
     else:
         raise HTTPException(status_code=403, detail="This role cannot perform the requested transition.")
 

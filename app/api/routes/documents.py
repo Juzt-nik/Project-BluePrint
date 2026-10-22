@@ -31,8 +31,17 @@ def _check_deposit_access(deposit: Deposit, user: User, *, upload: bool = False)
             raise HTTPException(status_code=403, detail="You may only access documents for your own institution.")
         if upload and deposit.status.value not in {"DRAFT", "CLARIFICATION_REQUIRED"}:
             raise HTTPException(status_code=409, detail="Documents can only be uploaded while a deposit is editable.")
-    elif role not in {"admin", "case_officer", "clearance_officer", "approval_authority", "auditor", "technical_admin"}:
-        raise HTTPException(status_code=403, detail="You are not permitted to access deposit documents.")
+    else:
+        # Technical administrators manage infrastructure; they do not need access
+        # to financial documents. Auditors may read but must remain read-only.
+        readable_roles = {"case_officer", "clearance_officer", "approval_authority", "auditor"}
+        if role not in readable_roles:
+            raise HTTPException(status_code=403, detail="You are not permitted to access deposit documents.")
+        if upload:
+            if role != "case_officer":
+                raise HTTPException(status_code=403, detail="Your role cannot upload financial documents.")
+            if deposit.status.value not in {"DRAFT", "SUBMITTED", "UNDER_SCRUTINY", "CLARIFICATION_REQUIRED"}:
+                raise HTTPException(status_code=409, detail="Documents cannot be uploaded at this deposit stage.")
     institution = deposit.institution
     if institution is None:
         raise HTTPException(status_code=404, detail="Institution not found.")

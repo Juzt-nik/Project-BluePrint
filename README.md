@@ -14,13 +14,12 @@ Starter foundation for SIH26265: Security Deposit / FDR Management Portal.
 - Synthetic-data and external-verification safety conventions
 
 ## Not included yet
-- Supabase Auth application-user provisioning / onboarding flow
-- Private Supabase Storage upload/download endpoints
-- Comprehensive security review, database RLS policies, and production-grade authorization testing
+- PostgreSQL Row Level Security policies and database-level tenant isolation
+- End-to-end tests against a dedicated Supabase Auth/Storage test project
+- Malware scanning, retention/deletion workflows, and orphan-object reconciliation
 - Real bank or AICTE integration
-- OCR pipeline
-- Email/SMS delivery
-- Production deployment configuration
+- OCR pipeline and email/SMS delivery
+- Production deployment configuration and independent security review
 
 Those will be added in later milestones. This foundation must not be represented as an official AICTE system.
 
@@ -105,12 +104,12 @@ Release requests have a distinct workflow:
 - `AUTHORITY_ACTION_RECORDED -> COMPLETED`
 - `COMPLETED`, `REJECTED` are terminal.
 
-The release route is represented by `release_method`: `FDR_RPGF` or `RTGS`. The actual authority and documents must be configured against the currently applicable official rules and SOP. The API currently enforces state transitions but does not yet implement a full regulatory checklist/clearance gate. That gate is the next milestone.
+The release route is represented by `release_method`: `FDR_RPGF` or `RTGS`. The actual authority and documents must be configured against the currently applicable official rules and SOP. The prototype enforces required configured clearances and competent-authority action fields, but it is not a full regulatory checklist and must be reviewed against current official rules.
 
 ## Important implementation notes
 - Do not store uploaded files in a public directory. `Document.storage_key` is metadata only.
 - `AuditEvent` is designed as append-only by application convention; database permissions/triggers and stronger tamper-evidence are needed for production.
-- Supabase Auth token validation and initial API role/institution checks are implemented, with mocked API authorization tests. These are not a production security certification. Database RLS policies, private Storage endpoints, comprehensive role/permission tests, and a security review are still required. Do not expose this API publicly until those controls are implemented and tested.
+- Supabase Auth token validation, application role/institution checks, and private Storage proxy endpoints are implemented. These are not a production security certification. Database RLS policies, dedicated Supabase integration tests, and an independent security review are still required. Do not expose this API publicly until those controls are implemented and tested.
 - Demo records/documents must be synthetic and visibly watermarked.
 ### Dependency and timestamp notes
 
@@ -148,9 +147,26 @@ Security limitations to address before production:
 This phase adds API endpoints under `/api/v1/release-requests`:
 - `POST /release-requests` — create a release request for an ACTIVE or MATURED deposit; maturity alone never releases a deposit.
 - `GET /release-requests` and `GET /release-requests/{id}` — role/institution-scoped reads.
-- `POST /release-requests/{id}/clearances/{unit}` — clearance officers record a decision for `PGRC`, `VIGILANCE`, or `RELEVANT_CELL_OR_BUREAU`.
-- `POST /release-requests/{id}/transition` — controlled state transitions, including a required clearance gate before `READY_FOR_AUTHORITY`, and a required authority reference/date/note before final action can be recorded.
+- `POST /release-requests/{id}/clearances/{unit}/assign` — case reviewers or platform admins assign a configured clearance to an active clearance-officer account.
+- `POST /release-requests/{id}/clearances/{unit}` — only the assigned clearance officer can record a decision; the release requester cannot decide their own clearance.
+- `POST /release-requests/{id}/transition` — controlled state transitions, including a required `CLEARED` decision for every mandatory unit before `READY_FOR_AUTHORITY`, and a required authority reference/date/note before final action can be recorded.
 
 The three clearance units are a conservative prototype baseline, not a claim that they are the complete or universally applicable AICTE clearance list. Confirm the exact units and NOC rules against current official instructions before production use. This prototype records a final authority action; it does not execute a bank transfer or contact AICTE/banks. Do not treat `NOT_APPLICABLE` as a shortcut without a documented policy and authorized review.
 
 Run `python -m pytest -q` in the project virtual environment. This ZIP was assembled from the supplied repository snapshot; full tests could not be executed in the packaging environment because its Python environment does not include the `psycopg` driver. Validate locally before committing.
+
+
+## Security hardening (Phase 3)
+
+Security-focused API tests cover cross-institution release-request reads, read-only auditor behavior for uploads, denial of financial-document downloads to technical administrators, assignment-gated clearance decisions, unit assignment validation, separation between clearance and final-authority decisions, and denial of `NOT_APPLICABLE` as a shortcut for a mandatory clearance.
+
+Implementation controls added in this phase:
+- Release transitions and clearance changes lock the parent release-request row on PostgreSQL to serialize concurrent workflow actions.
+- Regulatory clearance and final-authority roles are separate from the platform-admin role.
+- Clearance decisions require an explicit assignment to an active clearance-officer account.
+- A release requester cannot decide their own clearance or provide the final authority action.
+- A clearance decision-maker cannot provide the final authority action for the same release.
+- Mandatory clearances must be `CLEARED`; `NOT_APPLICABLE` does not satisfy a mandatory gate.
+- Technical administrators are denied document downloads, and auditors are read-only for document upload.
+
+The automated test suite passed in a local SQLite-backed test run (`34 passed`). This is not a live Supabase/PostgreSQL concurrency test and does not replace verification in the project's own `.venv`, tests against Supabase, or an independent security review.
